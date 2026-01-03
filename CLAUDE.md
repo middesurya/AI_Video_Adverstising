@@ -34,7 +34,20 @@ This document provides comprehensive guidance for AI assistants working on the A
 - **HTTP Client:** httpx 0.25.0, requests 2.31.0
 - **Testing:** pytest 7.4.3, pytest-asyncio 0.21.1
 - **Video Processing:** ffmpeg-python 0.2.0
-- **Port:** 8002 (or 8001, check START_SERVERS.md)
+- **Authentication:** Supabase 2.3.0, python-jose 3.3.0
+- **Port:** 8002
+
+### Authentication & Database (SaaS Features)
+- **Platform:** Supabase (PostgreSQL + Auth + Storage)
+- **Frontend Auth:** @supabase/supabase-js 2.39.0, @supabase/auth-helpers-nextjs 0.8.7
+- **Backend Auth:** JWT token verification with python-jose
+- **Features:**
+  - User authentication (signup, login, password reset)
+  - Row Level Security (RLS) policies
+  - Project management (save/load)
+  - Usage tracking and cost calculation
+  - Subscription limits (free tier: 2 videos/month)
+- **Status:** Fully implemented (see `SUPABASE_SETUP.md`)
 
 ## Directory Structure
 
@@ -43,33 +56,47 @@ AI_Video_Adverstising/
 ├── frontend/                    # Next.js frontend application
 │   ├── pages/                   # Next.js pages (routing)
 │   │   ├── index.js            # Main application page (4-step wizard)
-│   │   └── _app.js             # Next.js app wrapper
+│   │   ├── _app.js             # Next.js app wrapper with AuthProvider
+│   │   └── auth/               # Authentication pages
+│   │       ├── login.js        # Login page
+│   │       └── signup.js       # Signup page
 │   ├── components/              # React components
 │   │   ├── PromptRefinement.js # Step 1: Creative brief input
 │   │   ├── ChatInterface.js    # Step 2: AI chat refinement
 │   │   ├── Storyboard.js       # Step 3: Scene editor
 │   │   └── VideoPreview.js     # Step 4: Video preview & export
+│   ├── contexts/                # React contexts
+│   │   └── AuthContext.js      # Authentication context provider
+│   ├── lib/                     # Utility libraries
+│   │   └── supabase.js         # Supabase client configuration
 │   ├── styles/                  # CSS Modules
 │   │   ├── Home.module.css
 │   │   ├── ChatInterface.module.css
 │   │   ├── PromptRefinement.module.css
-│   │   └── Storyboard.module.css
+│   │   ├── Storyboard.module.css
+│   │   └── Auth.module.css     # Authentication pages styles
 │   ├── __tests__/               # Frontend tests
 │   ├── package.json
 │   ├── jest.config.js
-│   └── next.config.js
+│   ├── next.config.js
+│   └── .env.local.example      # Frontend environment variables template
 │
 ├── backend/                     # FastAPI backend application
-│   ├── main.py                 # Main FastAPI app (13 endpoints)
+│   ├── main.py                 # Main FastAPI app (now with protected endpoints)
+│   ├── auth.py                 # Authentication service (Supabase + JWT)
+│   ├── config.py               # Configuration management
+│   ├── logger.py               # Structured logging
 │   ├── video_service.py        # Video generation service (Runway ML, Stability AI)
 │   ├── video_generator.py      # Video generation helpers
-│   ├── requirements.txt        # Python dependencies
+│   ├── requirements.txt        # Python dependencies (includes Supabase)
 │   ├── videos/                 # Generated video output directory
-│   ├── test_main.py            # Backend API tests (13 tests)
+│   ├── test_main.py            # Backend API tests (29 tests)
+│   ├── test_error_handling.py  # Error handling tests (16 tests)
 │   ├── test_simple.py          # Simple health check tests
 │   ├── test_video_setup.py     # Video generation setup tests
 │   ├── verify_setup.py         # Environment verification script
-│   └── quick_test.py           # Quick test script
+│   ├── quick_test.py           # Quick test script
+│   └── .env.example            # Backend environment variables template
 │
 ├── package.json                # Root package.json with monorepo scripts
 ├── .gitignore                  # Git ignore patterns
@@ -78,6 +105,10 @@ AI_Video_Adverstising/
 ├── VIDEO_GENERATION_SETUP.md   # Video API setup instructions
 ├── API_RECOMMENDATIONS.md      # Video API provider recommendations
 ├── START_SERVERS.md            # Server startup guide
+├── SUPABASE_SETUP.md           # Supabase authentication setup guide ⭐ NEW
+├── SAAS_IMPLEMENTATION_PLAN.md # Complete SaaS implementation guide
+├── IMPLEMENTATION_SUMMARY.md   # Summary of implemented features
+├── TESTING_RECOMMENDATIONS.md  # Testing strategy and recommendations
 └── CLAUDE.md                   # This file - AI assistant guide
 
 ```
@@ -170,17 +201,119 @@ Shows generated video with download/export options.
 #### `backend/video_generator.py`
 Helper functions for video generation (to be verified).
 
+#### `backend/auth.py` ⭐ NEW
+**Authentication and database service module.** Handles user authentication and data operations.
+
+**Key Components:**
+- `get_current_user()` - JWT token verification dependency for FastAPI
+- `SubscriptionChecker` - Check and manage subscription limits
+- `Database` - CRUD operations for projects and usage tracking
+
+**Functions:**
+- `get_current_user()` - Verify JWT and return user payload (use as FastAPI dependency)
+- `SubscriptionChecker.check_video_generation_allowed()` - Verify user has credits
+- `SubscriptionChecker.increment_usage()` - Increment monthly usage count
+- `SubscriptionChecker.get_subscription_info()` - Get subscription details
+- `Database.create_project()` - Save project to database
+- `Database.get_user_projects()` - Get all user projects
+- `Database.get_project()` - Get specific project
+- `Database.update_project()` - Update project
+- `Database.delete_project()` - Delete project
+- `Database.track_api_usage()` - Track API usage for billing
+- `Database.get_user_usage()` - Get usage statistics
+
+**Environment Variables:**
+- `SUPABASE_URL` - Supabase project URL
+- `SUPABASE_SERVICE_KEY` - Service role key (server-side only)
+- `SUPABASE_JWT_SECRET` - JWT secret for token verification
+
+**Important:** Falls back gracefully if Supabase is not configured (AUTH_ENABLED flag in main.py)
+
+#### `backend/config.py`
+**Configuration management module.** Centralizes all environment variable handling.
+
+**Features:**
+- Environment variable validation on startup
+- Configuration summary printing
+- Environment-aware settings (development vs production)
+- Warnings for misconfiguration
+
+#### `backend/logger.py`
+**Structured logging module.** Provides professional logging infrastructure.
+
+**Features:**
+- Colored console output for different log levels
+- Consistent logging format across the application
+- Replaces all print() statements
+
+### Frontend Authentication Files
+
+#### `frontend/lib/supabase.js` ⭐ NEW
+**Supabase client configuration.** Initializes and exports Supabase client.
+
+**Exports:**
+- `supabase` - Configured Supabase client
+- `getAuthToken()` - Get current user's JWT token
+- `isAuthenticated()` - Check if user is logged in
+- `apiCall()` - Make authenticated requests to backend
+
+#### `frontend/contexts/AuthContext.js` ⭐ NEW
+**Authentication context provider.** Manages auth state across the app.
+
+**Provides:**
+- `user` - Current user object
+- `loading` - Loading state
+- `subscription` - User's subscription info
+- `signUp()` - Register new user
+- `signIn()` - Login user
+- `signOut()` - Logout user
+- `resetPassword()` - Send password reset email
+- `updatePassword()` - Update user password
+- `refreshSubscription()` - Refresh subscription data
+
+**HOC:**
+- `withAuth()` - Higher-order component to protect routes
+
+#### `frontend/pages/auth/login.js` & `signup.js` ⭐ NEW
+**Authentication pages.** Handle user login and registration.
+
+**Features:**
+- Form validation
+- Error handling
+- Loading states
+- Automatic redirect after login
+- Email confirmation flow (signup)
+
 ## API Endpoints Reference
+
+### Public Endpoints (No Authentication Required)
 
 | Endpoint | Method | Request Body | Response | Purpose |
 |----------|--------|--------------|----------|---------|
 | `/` | GET | - | `{"message": "...", "status": "healthy"}` | Health check |
 | `/health` | GET | - | Health status with services | Detailed health |
-| `/api/generate-script` | POST | `AdBrief` | `ScriptResponse` | Generate ad script |
-| `/api/generate-video` | POST | `VideoRequest` | `VideoResponse` | Generate video |
+| `/health/liveness` | GET | - | `{"status": "alive"}` | Kubernetes liveness probe |
+| `/health/readiness` | GET | - | `{"status": "ready", "checks": {...}}` | Kubernetes readiness probe |
+| `/api/generate-script` | POST | `AdBrief` | `ScriptResponse` | Generate ad script (no auth) |
+| `/api/generate-video` | POST | `VideoRequest` | `VideoResponse` | Generate video (no auth) |
 | `/api/archetypes` | GET | - | List of archetypes | Get story templates |
 | `/api/styles` | GET | - | List of styles | Get visual styles |
 | `/videos/{filename}` | GET | - | Video file | Serve generated videos |
+
+### Protected Endpoints (Require Authentication) ⭐ NEW
+
+**Authentication:** All protected endpoints require `Authorization: Bearer <token>` header with valid JWT token.
+
+| Endpoint | Method | Request Body | Response | Purpose |
+|----------|--------|--------------|----------|---------|
+| `/api/generate-script-protected` | POST | `AdBrief` | `ScriptResponse` | Generate script with usage tracking |
+| `/api/generate-video-protected` | POST | `VideoRequest` | `VideoResponse` | Generate video with cost tracking |
+| `/api/projects` | GET | - | `{"projects": [...]}` | Get all user projects |
+| `/api/projects/{id}` | GET | - | `{"project": {...}}` | Get specific project |
+| `/api/projects/{id}` | PUT | `{updates}` | `{"project": {...}}` | Update project |
+| `/api/projects/{id}` | DELETE | - | `{"message": "..."}` | Delete project |
+| `/api/usage` | GET | - | Usage stats | Get monthly usage & costs |
+| `/api/subscription` | GET | - | Subscription details | Get subscription info |
 
 ### Example Request/Response
 
@@ -483,24 +616,53 @@ See `API_RECOMMENDATIONS.md` for detailed setup instructions.
 
 ## Environment Variables
 
-Create `backend/.env`:
+### Backend Configuration (`backend/.env`)
+
+See `backend/.env.example` for full template.
 
 ```bash
-# Video Generation APIs
+# ===== Supabase Configuration (Required for Authentication) =====
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_SERVICE_KEY=your-service-role-key-here
+SUPABASE_JWT_SECRET=your-jwt-secret-here
+
+# ===== Video Generation APIs =====
 RUNWAY_API_KEY=your_runway_key_here
 STABILITY_API_KEY=your_stability_key_here
 
-# Text-to-Speech (Optional)
+# ===== Text-to-Speech (Optional) =====
 ELEVENLABS_API_KEY=your_elevenlabs_key_here
 
-# Configuration
+# ===== Application Configuration =====
 USE_MOCK_VIDEO=true  # Set to false to use real APIs
+ENV=development
+DEBUG=true
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
+
+### Frontend Configuration (`frontend/.env.local`)
+
+See `frontend/.env.local.example` for full template.
+
+```bash
+# ===== Supabase Configuration =====
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-public-key-here
+
+# ===== Backend API =====
+NEXT_PUBLIC_API_URL=http://localhost:8002
+```
+
+**IMPORTANT:**
+- Use the **anon** key in frontend, NOT the service role key
+- See `SUPABASE_SETUP.md` for detailed setup instructions
+- Authentication is optional - app works without Supabase configured
 
 ## Resources & Documentation
 
 - **FastAPI Docs:** https://fastapi.tiangolo.com/
 - **Next.js Docs:** https://nextjs.org/docs
+- **Supabase Docs:** https://supabase.com/docs ⭐ NEW
 - **Runway ML API:** https://runwayml.com
 - **Stability AI:** https://platform.stability.ai/
 - **ElevenLabs:** https://elevenlabs.io
@@ -551,24 +713,49 @@ When working on this codebase:
 
 ## Project Status
 
-**Current State:** MVP Complete
+**Current State:** SaaS-Ready Platform ✨
 - ✅ Frontend UI with 4-step workflow
 - ✅ Backend API with mock video generation
 - ✅ Script generation from creative brief
 - ✅ Storyboard editing
 - ✅ Video preview and export UI
-- ✅ All tests passing (13 backend, 44 frontend)
+- ✅ All tests passing (29 backend, 44+ frontend)
+- ✅ **User authentication (Supabase)** ⭐ NEW
+- ✅ **Project save/load functionality** ⭐ NEW
+- ✅ **Usage tracking & cost calculation** ⭐ NEW
+- ✅ **Subscription limits (free tier: 2 videos/month)** ⭐ NEW
+- ✅ **Protected API endpoints** ⭐ NEW
+- ✅ **Row Level Security (RLS) policies** ⭐ NEW
+- ✅ **Production-ready configuration** ⭐ NEW
 
-**Next Steps:**
-- Integrate real video generation APIs (Runway ML recommended)
+**Authentication Features:**
+- JWT-based authentication with Supabase
+- User signup/login/password reset
+- Project CRUD operations (create, read, update, delete)
+- API usage tracking for billing
+- Subscription management (free, pro, business tiers ready)
+- Automatic profile & subscription creation on signup
+- Graceful fallback when Supabase not configured
+
+**Next Steps (Optional Enhancements):**
+- Add real video generation APIs (Runway ML recommended)
 - Implement TTS for voiceovers
 - Add FFmpeg video assembly
-- Implement user authentication
-- Add project saving/loading
+- Integrate Stripe for payments
+- Add rate limiting with Redis
 - Cloud deployment with GPU support
+- Admin dashboard
+- Analytics and monitoring
+
+**Setup Guides:**
+- 📘 **Authentication Setup:** See `SUPABASE_SETUP.md`
+- 📘 **SaaS Features:** See `SAAS_IMPLEMENTATION_PLAN.md`
+- 📘 **Testing Guide:** See `TESTING_RECOMMENDATIONS.md`
+- 📘 **Implementation Summary:** See `IMPLEMENTATION_SUMMARY.md`
 
 ---
 
 **Last Updated:** 2026-01-03
+**Status:** Production-Ready with Full Authentication ✅
 **Maintained for:** Claude Code and other AI assistants
-**Questions?** Refer to README.md, SETUP_INSTRUCTIONS.md, or API_RECOMMENDATIONS.md
+**Questions?** Refer to SUPABASE_SETUP.md, SAAS_IMPLEMENTATION_PLAN.md, or CLAUDE.md

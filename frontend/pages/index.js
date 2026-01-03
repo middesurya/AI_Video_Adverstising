@@ -6,9 +6,7 @@ import Storyboard from '../components/Storyboard'
 import VideoPreview from '../components/VideoPreview'
 import styles from '../styles/Home.module.css'
 
-export default function Home() {
-  console.log('[DEBUG] Component rendered - VERSION 2.0', new Date().toISOString())
-  const [step, setStep] = useState(1)
+export default function Home() {  const [step, setStep] = useState(1)
   const [adBrief, setAdBrief] = useState({
     productName: '',
     description: '',
@@ -26,12 +24,7 @@ export default function Home() {
   const [error, setError] = useState(null)
   
   // Debug: Track state changes
-  useEffect(() => {
-    console.log('[DEBUG] State changed:', { step, isGenerating, hasVideoUrl: !!videoUrl, error })
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:26',message:'State changed',data:{step,isGenerating,hasVideoUrl:!!videoUrl,hasError:!!error},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-    // #endregion
-  }, [step, isGenerating, videoUrl, error])
+  useEffect(() => {  }, [step, isGenerating, videoUrl, error])
   
   // Safety: Force reset if isGenerating is stuck for too long
   useEffect(() => {
@@ -92,14 +85,7 @@ export default function Home() {
     }
   }
 
-  const handleGenerateVideo = async () => {
-    console.log('[DEBUG] handleGenerateVideo called', { scenesCount: scenes?.length, hasAdBrief: !!adBrief })
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:70',message:'handleGenerateVideo ENTRY',data:{scenesCount:scenes?.length,hasScenes:!!scenes,hasAdBrief:!!adBrief,productName:adBrief?.productName},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-    // #endregion
-    
-    // Validate inputs before starting
+  const handleGenerateVideo = async () => {    // Validate inputs before starting
     if (!scenes || scenes.length === 0) {
       console.error('[DEBUG] Validation failed: No scenes')
       setError('No scenes available. Please generate a script first.')
@@ -112,27 +98,10 @@ export default function Home() {
     }
     
     setIsGenerating(true)
-    setError(null)
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:85',message:'Validation passed, starting request',data:{scenesCount:scenes.length,productName:adBrief.productName},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-    // #endregion
-    
-    try {
+    setError(null)    try {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => {
-        console.log('[DEBUG] Timeout triggered after 10 seconds')
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:92',message:'Timeout triggered',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'2'})}).catch(()=>{});
-        // #endregion
-        controller.abort()
-      }, 10000) // 10 second timeout
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:98',message:'About to call fetch',data:{url:'http://localhost:8002/api/generate-video',bodyLength:JSON.stringify({scenes,adBrief}).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'3'})}).catch(()=>{});
-      // #endregion
-      
-      const fetchStartTime = Date.now()
+      const timeoutId = setTimeout(() => {        controller.abort()
+      }, 10000) // 10 second timeout      const fetchStartTime = Date.now()
       const response = await fetch('http://localhost:8002/api/generate-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -140,51 +109,19 @@ export default function Home() {
         signal: controller.signal
       })
       
-      const fetchDuration = Date.now() - fetchStartTime
-      console.log('[DEBUG] Fetch completed', { status: response.status, duration: fetchDuration })
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:110',message:'Fetch completed',data:{status:response.status,ok:response.ok,duration:fetchDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-      // #endregion
-      
-      clearTimeout(timeoutId)
+      const fetchDuration = Date.now() - fetchStartTime      clearTimeout(timeoutId)
       
       if (!response.ok) {
         const errorText = await response.text()
         throw new Error(`Server error: ${response.status} ${response.statusText}. ${errorText}`)
       }
       
-      const data = await response.json()
-      console.log('[DEBUG] Response parsed', { success: data.success, hasVideoUrl: !!data.videoUrl })
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:137',message:'Response parsed',data:{success:data.success,hasVideoUrl:!!data.videoUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-      // #endregion
-      
-      if (data.success) {
-        console.log('[DEBUG] Setting video URL and updating state', { videoUrl: data.videoUrl })
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:144',message:'About to update state',data:{videoUrl:data.videoUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-        // #endregion
-        setVideoUrl(data.videoUrl)
-        setIsGenerating(false)  // Reset loading state on success
-        console.log('[DEBUG] State updated, setting step to 4')
-        setStep(4)
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:150',message:'State update complete',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'1'})}).catch(()=>{});
-        // #endregion
-      } else {
-        console.log('[DEBUG] Response not successful', { error: data.error })
-        setError(data.error || 'Failed to generate video')
+      const data = await response.json()      if (data.success) {        setVideoUrl(data.videoUrl)
+        setIsGenerating(false)  // Reset loading state on success        setStep(4)      } else {        setError(data.error || 'Failed to generate video')
         setIsGenerating(false)
       }
     } catch (err) {
-      console.error('[DEBUG] Video generation error:', err)
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/e3859fe4-0bdc-4abf-acd7-fbb84c182406',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:135',message:'Exception caught',data:{name:err.name,message:err.message,isAbort:err.name==='AbortError'},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'2'})}).catch(()=>{});
-      // #endregion
-      
-      if (err.name === 'AbortError') {
+      console.error('[DEBUG] Video generation error:', err)      if (err.name === 'AbortError') {
         setError('Request timed out. Please check if the backend server is running on port 8002.')
       } else {
         setError(err.message || 'Failed to connect to server. Make sure the backend is running on port 8002.')

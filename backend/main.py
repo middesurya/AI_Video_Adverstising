@@ -3,17 +3,34 @@ AI-Powered Ad Video Generator - Backend API
 FastAPI backend for handling video generation requests
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import List, Optional
+from datetime import datetime
 import random
 import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Import config and logger
+from config import config
+from logger import logger
+
+# Import auth services (will use if configured)
+try:
+    from auth import get_current_user, SubscriptionChecker, Database, supabase
+    AUTH_ENABLED = supabase is not None
+    if AUTH_ENABLED:
+        logger.info("✅ Authentication enabled")
+    else:
+        logger.warning("⚠️ Authentication disabled - Supabase not configured")
+except ImportError as e:
+    logger.warning(f"⚠️ Authentication module not available: {e}")
+    AUTH_ENABLED = False
+    get_current_user = None
+    SubscriptionChecker = None
+    Database = None
+    supabase = None
 
 app = FastAPI(
     title="AI Ad Video Generator API",
@@ -28,16 +45,16 @@ os.makedirs(VIDEOS_DIR, exist_ok=True)
 # Serve static video files
 app.mount("/videos", StaticFiles(directory=VIDEOS_DIR), name="videos")
 
-# CORS middleware
+# CORS middleware with environment-aware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "*"],
+    allow_origins=config.allowed_origins if config.environment == "production" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Pydantic models
+# Pydantic models with enhanced validation
 class AdBrief(BaseModel):
     productName: str
     description: str
@@ -47,6 +64,38 @@ class AdBrief(BaseModel):
     archetype: str = "hero-journey"
     targetAudience: Optional[str] = ""
     callToAction: Optional[str] = ""
+
+    @validator('mood', 'energy')
+    def validate_range(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError('Value must be between 0 and 100')
+        return v
+
+    @validator('productName', 'description')
+    def validate_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Field cannot be empty')
+        return v.strip()
+
+    @validator('description')
+    def validate_description_length(cls, v):
+        if len(v) > 5000:
+            raise ValueError('Description too long (max 5000 characters)')
+        return v
+
+    @validator('style')
+    def validate_style(cls, v):
+        valid_styles = ['cinematic', 'minimalist', 'energetic', 'warm', 'professional', 'playful']
+        if v not in valid_styles:
+            raise ValueError(f'Style must be one of: {", ".join(valid_styles)}')
+        return v
+
+    @validator('archetype')
+    def validate_archetype(cls, v):
+        valid_archetypes = ['hero-journey', 'testimonial', 'problem-solution', 'tutorial', 'comedy', 'lifestyle']
+        if v not in valid_archetypes:
+            raise ValueError(f'Archetype must be one of: {", ".join(valid_archetypes)}')
+        return v
 
 class Scene(BaseModel):
     description: str
@@ -59,6 +108,7 @@ class ScriptResponse(BaseModel):
     success: bool
     script: Optional[str] = None
     scenes: Optional[List[Scene]] = None
+    project_id: Optional[str] = None
     error: Optional[str] = None
 
 class VideoRequest(BaseModel):
@@ -171,10 +221,41 @@ Strong closing with logo and CTA overlay.
     return script, scenes
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Print configuration on startup"""
+    config.print_config()
+    logger.info("🚀 AI Ad Video Generator API started successfully")
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {"message": "AI Ad Video Generator API", "status": "healthy"}
+
+
+@app.get("/health/liveness")
+async def liveness():
+    """Kubernetes liveness probe - checks if the application is alive"""
+    return {"status": "alive", "timestamp": os.times().elapsed}
+
+
+@app.get("/health/readiness")
+async def readiness():
+    """Kubernetes readiness probe - checks if the application is ready to serve requests"""
+    checks = {
+        "api": "ready",
+        "videos_dir": os.path.exists(VIDEOS_DIR),
+        "config_valid": config.validate()[0]
+    }
+
+    all_ready = all(checks.values())
+    status_code = 200 if all_ready else 503
+
+    return {
+        "status": "ready" if all_ready else "not ready",
+        "checks": checks
+    }
 
 
 @app.get("/health")
@@ -217,34 +298,14 @@ async def generate_script(brief: AdBrief):
 async def generate_video(request: VideoRequest):
     """Generate video from scenes and ad brief"""
     from video_service import VideoGenerationService
-    import json
-    import time
-    
-    log_path = r"c:\Users\surya\OneDrive\Desktop\work\projects\personal_proj\Advertising\.cursor\debug.log"
-    
-    # #region agent log
-    try:
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"location":"main.py:217","message":"generate_video endpoint called","data":{"scenesCount":len(request.scenes) if request.scenes else 0,"productName":request.adBrief.productName if request.adBrief else "None"},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + "\n")
-    except:
-        pass
-    # #endregion
-    
+
     try:
         if not request.scenes:
             raise HTTPException(status_code=400, detail="Scenes are required")
-        
+
         # Initialize video generation service
         video_service = VideoGenerationService()
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:228","message":"VideoGenerationService initialized","data":{"hasStabilityKey":bool(video_service.stability_api_key),"useMock":video_service.use_mock},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         # Convert Pydantic models to dicts for the service
         ad_brief_dict = {
             "productName": request.adBrief.productName,
@@ -253,7 +314,7 @@ async def generate_video(request: VideoRequest):
             "mood": request.adBrief.mood,
             "energy": request.adBrief.energy
         }
-        
+
         # For now, generate a single combined video
         # In production, you'd generate videos for each scene and combine them
         first_scene = request.scenes[0]
@@ -262,52 +323,28 @@ async def generate_video(request: VideoRequest):
             "duration": first_scene.duration,
             "narration": first_scene.narration or first_scene.description
         }
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:250","message":"Calling generate_video_for_scene","data":{"sceneDescription":scene_dict.get("description","")[:50],"productName":ad_brief_dict.get("productName","")},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         # Generate video
         video_url = video_service.generate_video_for_scene(
             scene_dict,
             ad_brief_dict,
             VIDEOS_DIR
         )
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:260","message":"generate_video_for_scene returned","data":{"videoUrl":video_url},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         # Generate audio if TTS is configured
         audio_path = video_service.generate_audio_for_scene(scene_dict, VIDEOS_DIR)
-        
+
         # If we have both video and audio, combine them
         if audio_path and os.path.exists(audio_path):
             # For now, just use the video URL
             # Full implementation would combine video + audio
             pass
-        
+
         # Calculate hook score based on scene quality
         hook_score = random.randint(70, 95)
         if len(request.scenes) >= 6:
             hook_score += 5  # Bonus for complete storyboard
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:280","message":"Returning VideoResponse","data":{"success":True,"videoUrl":video_url,"hookScore":min(hook_score, 100)},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"C"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         return VideoResponse(
             success=True,
             videoUrl=video_url,
@@ -316,13 +353,6 @@ async def generate_video(request: VideoRequest):
     except HTTPException:
         raise
     except Exception as e:
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:290","message":"Exception in generate_video","data":{"error":str(e)},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}) + "\n")
-        except:
-            pass
-        # #endregion
         return VideoResponse(
             success=False,
             error=str(e)
@@ -358,6 +388,290 @@ async def get_styles():
             {"id": "playful", "name": "Playful", "description": "Fun, whimsical style"}
         ]
     }
+
+
+# ==================== PROTECTED ENDPOINTS (REQUIRE AUTHENTICATION) ====================
+
+@app.post("/api/generate-script-protected", response_model=ScriptResponse)
+async def generate_script_protected(
+    brief: AdBrief,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """
+    Generate script with authentication and subscription checking
+    Requires valid JWT token in Authorization header
+    """
+    if not AUTH_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication not configured. Use /api/generate-script instead."
+        )
+
+    user_id = user["sub"]
+    logger.info(f"Protected script generation for user: {user_id}")
+
+    try:
+        # Check subscription limits
+        await SubscriptionChecker.check_video_generation_allowed(user_id)
+
+        # Generate script
+        script, scenes = generate_mock_script(brief)
+
+        # Save project to database
+        project = await Database.create_project(user_id, {
+            "name": f"{brief.productName} - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "product_name": brief.productName,
+            "description": brief.description,
+            "mood": brief.mood,
+            "energy": brief.energy,
+            "style": brief.style,
+            "archetype": brief.archetype,
+            "target_audience": brief.targetAudience or "",
+            "call_to_action": brief.callToAction or "",
+            "script": script,
+            "scenes": [scene.dict() for scene in scenes],
+            "status": "draft"
+        })
+
+        logger.info(f"✅ Created project {project['id']} for user {user_id}")
+
+        return ScriptResponse(
+            success=True,
+            script=script,
+            scenes=scenes,
+            project_id=project["id"]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Script generation error: {e}")
+        return ScriptResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.post("/api/generate-video-protected", response_model=VideoResponse)
+async def generate_video_protected(
+    request: VideoRequest,
+    project_id: Optional[str] = None,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """
+    Generate video with authentication and usage tracking
+    Requires valid JWT token in Authorization header
+    """
+    if not AUTH_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication not configured. Use /api/generate-video instead."
+        )
+
+    user_id = user["sub"]
+    logger.info(f"Protected video generation for user: {user_id}")
+
+    from video_service import VideoGenerationService
+
+    try:
+        # Check subscription limits
+        await SubscriptionChecker.check_video_generation_allowed(user_id)
+
+        if not request.scenes:
+            raise HTTPException(status_code=400, detail="Scenes are required")
+
+        # Initialize video generation service
+        video_service = VideoGenerationService()
+
+        # Convert Pydantic models to dicts
+        ad_brief_dict = {
+            "productName": request.adBrief.productName,
+            "description": request.adBrief.description,
+            "style": request.adBrief.style,
+            "mood": request.adBrief.mood,
+            "energy": request.adBrief.energy
+        }
+
+        first_scene = request.scenes[0]
+        scene_dict = {
+            "description": first_scene.description,
+            "duration": first_scene.duration,
+            "narration": first_scene.narration or first_scene.description
+        }
+
+        # Generate video
+        video_url = video_service.generate_video_for_scene(
+            scene_dict,
+            ad_brief_dict,
+            VIDEOS_DIR
+        )
+
+        # Generate audio if TTS is configured
+        audio_path = video_service.generate_audio_for_scene(scene_dict, VIDEOS_DIR)
+
+        # Calculate costs (example - adjust based on actual API costs)
+        video_cost = first_scene.duration * 0.05  # $0.05 per second
+        total_cost = video_cost
+
+        # Track API usage
+        await Database.track_api_usage(
+            user_id=user_id,
+            project_id=project_id or "unknown",
+            service="runway_ml" if not config.use_mock_video else "mock",
+            operation="video_generation",
+            units=first_scene.duration,
+            cost=total_cost,
+            metadata={"scenes": len(request.scenes), "style": request.adBrief.style}
+        )
+
+        # Increment usage count
+        await SubscriptionChecker.increment_usage(user_id)
+
+        # Update project if project_id provided
+        if project_id:
+            await Database.update_project(project_id, user_id, {
+                "video_url": video_url,
+                "status": "complete",
+                "completed_at": datetime.now().isoformat()
+            })
+
+        # Calculate hook score
+        hook_score = random.randint(70, 95)
+        if len(request.scenes) >= 6:
+            hook_score += 5
+
+        logger.info(f"✅ Generated video for user {user_id}, cost: ${total_cost:.4f}")
+
+        return VideoResponse(
+            success=True,
+            videoUrl=video_url,
+            hookScore=min(hook_score, 100)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video generation error: {e}")
+        return VideoResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+# ==================== PROJECT MANAGEMENT ENDPOINTS ====================
+
+@app.get("/api/projects")
+async def get_projects(user = Depends(get_current_user) if AUTH_ENABLED else None):
+    """Get all projects for authenticated user"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    projects = await Database.get_user_projects(user_id)
+
+    logger.info(f"📁 Retrieved {len(projects)} projects for user {user_id}")
+    return {"projects": projects}
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(
+    project_id: str,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """Get a specific project"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    project = await Database.get_project(project_id, user_id)
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return {"project": project}
+
+
+@app.put("/api/projects/{project_id}")
+async def update_project(
+    project_id: str,
+    updates: dict,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """Update a project"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    project = await Database.update_project(project_id, user_id, updates)
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    logger.info(f"✏️ Updated project {project_id}")
+    return {"project": project}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """Delete a project"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    await Database.delete_project(project_id, user_id)
+
+    logger.info(f"🗑️ Deleted project {project_id}")
+    return {"message": "Project deleted successfully"}
+
+
+# ==================== USAGE & SUBSCRIPTION ENDPOINTS ====================
+
+@app.get("/api/usage")
+async def get_usage(user = Depends(get_current_user) if AUTH_ENABLED else None):
+    """Get user's usage statistics and subscription info"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+
+    try:
+        # Get subscription info
+        subscription = await SubscriptionChecker.get_subscription_info(user_id)
+
+        # Get usage stats
+        usage_stats = await Database.get_user_usage(user_id)
+
+        return {
+            "subscription": subscription,
+            "monthly_usage": {
+                "videos_generated": subscription.get("current_month_usage", 0) if subscription else 0,
+                "monthly_limit": subscription.get("monthly_video_limit", 0) if subscription else 0,
+                "total_cost_usd": usage_stats.get("total_cost", 0)
+            },
+            "usage_details": usage_stats.get("usage", [])
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching usage: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch usage: {str(e)}")
+
+
+@app.get("/api/subscription")
+async def get_subscription(user = Depends(get_current_user) if AUTH_ENABLED else None):
+    """Get user's subscription details"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    subscription = await SubscriptionChecker.get_subscription_info(user_id)
+
+    if not subscription:
+        raise HTTPException(status_code=404, detail="No subscription found")
+
+    return {"subscription": subscription}
 
 
 if __name__ == "__main__":
