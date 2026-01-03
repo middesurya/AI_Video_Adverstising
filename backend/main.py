@@ -6,14 +6,14 @@ FastAPI backend for handling video generation requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import List, Optional
 import random
 import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Import config and logger
+from config import config
+from logger import logger
 
 app = FastAPI(
     title="AI Ad Video Generator API",
@@ -28,16 +28,16 @@ os.makedirs(VIDEOS_DIR, exist_ok=True)
 # Serve static video files
 app.mount("/videos", StaticFiles(directory=VIDEOS_DIR), name="videos")
 
-# CORS middleware
+# CORS middleware with environment-aware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "*"],
+    allow_origins=config.allowed_origins if config.environment == "production" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Pydantic models
+# Pydantic models with enhanced validation
 class AdBrief(BaseModel):
     productName: str
     description: str
@@ -47,6 +47,38 @@ class AdBrief(BaseModel):
     archetype: str = "hero-journey"
     targetAudience: Optional[str] = ""
     callToAction: Optional[str] = ""
+
+    @validator('mood', 'energy')
+    def validate_range(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError('Value must be between 0 and 100')
+        return v
+
+    @validator('productName', 'description')
+    def validate_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Field cannot be empty')
+        return v.strip()
+
+    @validator('description')
+    def validate_description_length(cls, v):
+        if len(v) > 5000:
+            raise ValueError('Description too long (max 5000 characters)')
+        return v
+
+    @validator('style')
+    def validate_style(cls, v):
+        valid_styles = ['cinematic', 'minimalist', 'energetic', 'warm', 'professional', 'playful']
+        if v not in valid_styles:
+            raise ValueError(f'Style must be one of: {", ".join(valid_styles)}')
+        return v
+
+    @validator('archetype')
+    def validate_archetype(cls, v):
+        valid_archetypes = ['hero-journey', 'testimonial', 'problem-solution', 'tutorial', 'comedy', 'lifestyle']
+        if v not in valid_archetypes:
+            raise ValueError(f'Archetype must be one of: {", ".join(valid_archetypes)}')
+        return v
 
 class Scene(BaseModel):
     description: str
@@ -171,10 +203,41 @@ Strong closing with logo and CTA overlay.
     return script, scenes
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Print configuration on startup"""
+    config.print_config()
+    logger.info("🚀 AI Ad Video Generator API started successfully")
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {"message": "AI Ad Video Generator API", "status": "healthy"}
+
+
+@app.get("/health/liveness")
+async def liveness():
+    """Kubernetes liveness probe - checks if the application is alive"""
+    return {"status": "alive", "timestamp": os.times().elapsed}
+
+
+@app.get("/health/readiness")
+async def readiness():
+    """Kubernetes readiness probe - checks if the application is ready to serve requests"""
+    checks = {
+        "api": "ready",
+        "videos_dir": os.path.exists(VIDEOS_DIR),
+        "config_valid": config.validate()[0]
+    }
+
+    all_ready = all(checks.values())
+    status_code = 200 if all_ready else 503
+
+    return {
+        "status": "ready" if all_ready else "not ready",
+        "checks": checks
+    }
 
 
 @app.get("/health")

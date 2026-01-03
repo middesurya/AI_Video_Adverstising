@@ -8,14 +8,19 @@ import time
 from typing import List, Dict
 import json
 
+# Import logger
+from logger import logger
+
 class VideoGenerationService:
     """Service for generating videos using cloud APIs"""
-    
+
     def __init__(self):
         self.stability_api_key = os.getenv("STABILITY_API_KEY")
         self.runway_api_key = os.getenv("RUNWAY_API_KEY")
         self.elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
         self.use_mock = os.getenv("USE_MOCK_VIDEO", "true").lower() == "true"
+
+        logger.info(f"VideoGenerationService initialized (mock_mode={self.use_mock})")
         
     
     def generate_video_for_scene(self, scene: Dict, ad_brief: Dict, output_dir: str) -> str:
@@ -56,7 +61,7 @@ class VideoGenerationService:
             image_prompt = f"{scene.get('description', '')}. Style: {ad_brief.get('style', 'cinematic')}, professional, high quality"
             
             
-            print(f"Generating image for scene: {image_prompt}")
+            logger.info(f"Generating image for scene: {image_prompt}")
             
             # Generate image using Stability AI image generation
             image_response = requests.post(
@@ -79,7 +84,7 @@ class VideoGenerationService:
             
             if image_response.status_code != 200:
                 error_msg = image_response.text
-                print(f"Stability AI image generation failed: {error_msg}")
+                logger.error(f"Stability AI image generation failed: {error_msg}")
                 raise Exception(f"Image generation failed: {error_msg}")
             
             # Parse image response
@@ -96,11 +101,11 @@ class VideoGenerationService:
             with open(temp_image_path, 'wb') as f:
                 f.write(image_bytes)
             
-            print(f"Image generated, saved to: {temp_image_path}")
+            logger.info(f"Image generated, saved to: {temp_image_path}")
             
             
             # Step 2: Convert image to video using Stable Video Diffusion
-            print("Converting image to video...")
+            logger.info("Converting image to video...")
             
             # Try v2beta endpoint first (more stable)
             endpoint_version = "v2beta"
@@ -152,7 +157,7 @@ class VideoGenerationService:
             
             if video_response.status_code not in [200, 202]:
                 error_msg = video_response.text
-                print(f"Stability AI video generation failed: {error_msg}")
+                logger.error(f"Stability AI video generation failed: {error_msg}")
                 
                 
                 # Note: Stability AI video generation API may not be publicly available
@@ -169,8 +174,8 @@ class VideoGenerationService:
                 if not generation_id:
                     raise Exception("No generation ID in response")
                 
-                print(f"Video generation started, ID: {generation_id}")
-                print("Polling for completion...")
+                logger.info(f"Video generation started, ID: {generation_id}")
+                logger.info("Polling for completion...")
                 
                 # Poll for completion
                 max_polls = 60  # 5 minutes max
@@ -195,7 +200,7 @@ class VideoGenerationService:
                         break
                     elif status_response.status_code == 202:
                         # Still processing
-                        print(f"Still processing... ({i+1}/{max_polls})")
+                        logger.info(f"Still processing... ({i+1}/{max_polls})")
                         continue
                     else:
                         raise Exception(f"Status check failed: {status_response.text}")
@@ -215,11 +220,11 @@ class VideoGenerationService:
                 f.write(video_bytes)
             
             
-            print(f"Video generated successfully: {output_path}")
+            logger.info(f"Video generated successfully: {output_path}")
             return f"/videos/{filename}"
             
         except Exception as e:
-            print(f"Stability AI error: {e}")
+            logger.error(f"Stability AI error: {e}")
             import traceback
             traceback.print_exc()
             
@@ -239,7 +244,7 @@ class VideoGenerationService:
             duration = min(scene.get('duration', 10), 10)  # Max 10 seconds for Runway ML
             
             
-            print(f"Generating video with Runway ML: {prompt}")
+            logger.info(f"Generating video with Runway ML: {prompt}")
             
             # Runway ML API endpoint for text-to-video (Gen-4 Turbo)
             # Correct endpoint: api.dev.runwayml.com (not api.runwayml.com)
@@ -261,7 +266,7 @@ class VideoGenerationService:
             
             if runway_response.status_code not in [200, 201, 202]:
                 error_msg = runway_response.text
-                print(f"Runway ML API error: {error_msg}")
+                logger.error(f"Runway ML API error: {error_msg}")
                 raise Exception(f"Runway ML API error (Status {runway_response.status_code}): {error_msg}")
             
             # Parse response
@@ -271,8 +276,8 @@ class VideoGenerationService:
             if not task_id:
                 raise Exception("No task ID in Runway ML response")
             
-            print(f"Runway ML task created: {task_id}")
-            print("Polling for completion...")
+            logger.info(f"Runway ML task created: {task_id}")
+            logger.info("Polling for completion...")
             
             
             # Poll for task completion
@@ -312,20 +317,20 @@ class VideoGenerationService:
                         raise Exception("No video URL in completed task")
                     
                     
-                    print(f"Video ready, downloading from: {video_url}")
+                    logger.info(f"Video ready, downloading from: {video_url}")
                     break
                 elif status == "failed" or status == "error":
                     error_msg = task_status.get("error") or task_status.get("message") or "Unknown error"
                     raise Exception(f"Runway ML task failed: {error_msg}")
                 else:
                     # Still processing
-                    print(f"Still processing... ({i+1}/{max_polls}) - Status: {status}")
+                    logger.info(f"Still processing... ({i+1}/{max_polls}) - Status: {status}")
                     continue
             else:
                 raise Exception("Runway ML video generation timed out")
             
             # Download video from URL
-            print("Downloading video...")
+            logger.info("Downloading video...")
             video_download = requests.get(video_url, timeout=120)
             
             if video_download.status_code != 200:
@@ -340,11 +345,11 @@ class VideoGenerationService:
                 f.write(video_download.content)
             
             
-            print(f"Video generated successfully: {output_path}")
+            logger.info(f"Video generated successfully: {output_path}")
             return f"/videos/{filename}"
             
         except Exception as e:
-            print(f"Runway ML error: {e}")
+            logger.error(f"Runway ML error: {e}")
             import traceback
             traceback.print_exc()
             
@@ -399,7 +404,7 @@ class VideoGenerationService:
             return None
             
         except Exception as e:
-            print(f"ElevenLabs error: {e}")
+            logger.error(f"ElevenLabs error: {e}")
             return None
     
     def combine_video_and_audio(self, video_path: str, audio_path: str, output_path: str):
@@ -419,12 +424,12 @@ class VideoGenerationService:
             ).overwrite_output().run()
             
         except ImportError:
-            print("ffmpeg-python not installed. Install with: pip install ffmpeg-python")
+            logger.info("ffmpeg-python not installed. Install with: pip install ffmpeg-python")
             # Just copy video if no audio
             import shutil
             shutil.copy(video_path, output_path)
         except Exception as e:
-            print(f"FFmpeg error: {e}")
+            logger.error(f"FFmpeg error: {e}")
             # Fallback: just copy video
             import shutil
             shutil.copy(video_path, output_path)
