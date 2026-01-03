@@ -3,17 +3,34 @@ AI-Powered Ad Video Generator - Backend API
 FastAPI backend for handling video generation requests
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, validator
 from typing import List, Optional
+from datetime import datetime
 import random
 import os
 
 # Import config and logger
 from config import config
 from logger import logger
+
+# Import auth services (will use if configured)
+try:
+    from auth import get_current_user, SubscriptionChecker, Database, supabase
+    AUTH_ENABLED = supabase is not None
+    if AUTH_ENABLED:
+        logger.info("✅ Authentication enabled")
+    else:
+        logger.warning("⚠️ Authentication disabled - Supabase not configured")
+except ImportError as e:
+    logger.warning(f"⚠️ Authentication module not available: {e}")
+    AUTH_ENABLED = False
+    get_current_user = None
+    SubscriptionChecker = None
+    Database = None
+    supabase = None
 
 app = FastAPI(
     title="AI Ad Video Generator API",
@@ -91,6 +108,7 @@ class ScriptResponse(BaseModel):
     success: bool
     script: Optional[str] = None
     scenes: Optional[List[Scene]] = None
+    project_id: Optional[str] = None
     error: Optional[str] = None
 
 class VideoRequest(BaseModel):
@@ -370,6 +388,290 @@ async def get_styles():
             {"id": "playful", "name": "Playful", "description": "Fun, whimsical style"}
         ]
     }
+
+
+# ==================== PROTECTED ENDPOINTS (REQUIRE AUTHENTICATION) ====================
+
+@app.post("/api/generate-script-protected", response_model=ScriptResponse)
+async def generate_script_protected(
+    brief: AdBrief,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """
+    Generate script with authentication and subscription checking
+    Requires valid JWT token in Authorization header
+    """
+    if not AUTH_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication not configured. Use /api/generate-script instead."
+        )
+
+    user_id = user["sub"]
+    logger.info(f"Protected script generation for user: {user_id}")
+
+    try:
+        # Check subscription limits
+        await SubscriptionChecker.check_video_generation_allowed(user_id)
+
+        # Generate script
+        script, scenes = generate_mock_script(brief)
+
+        # Save project to database
+        project = await Database.create_project(user_id, {
+            "name": f"{brief.productName} - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "product_name": brief.productName,
+            "description": brief.description,
+            "mood": brief.mood,
+            "energy": brief.energy,
+            "style": brief.style,
+            "archetype": brief.archetype,
+            "target_audience": brief.targetAudience or "",
+            "call_to_action": brief.callToAction or "",
+            "script": script,
+            "scenes": [scene.dict() for scene in scenes],
+            "status": "draft"
+        })
+
+        logger.info(f"✅ Created project {project['id']} for user {user_id}")
+
+        return ScriptResponse(
+            success=True,
+            script=script,
+            scenes=scenes,
+            project_id=project["id"]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Script generation error: {e}")
+        return ScriptResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.post("/api/generate-video-protected", response_model=VideoResponse)
+async def generate_video_protected(
+    request: VideoRequest,
+    project_id: Optional[str] = None,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """
+    Generate video with authentication and usage tracking
+    Requires valid JWT token in Authorization header
+    """
+    if not AUTH_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication not configured. Use /api/generate-video instead."
+        )
+
+    user_id = user["sub"]
+    logger.info(f"Protected video generation for user: {user_id}")
+
+    from video_service import VideoGenerationService
+
+    try:
+        # Check subscription limits
+        await SubscriptionChecker.check_video_generation_allowed(user_id)
+
+        if not request.scenes:
+            raise HTTPException(status_code=400, detail="Scenes are required")
+
+        # Initialize video generation service
+        video_service = VideoGenerationService()
+
+        # Convert Pydantic models to dicts
+        ad_brief_dict = {
+            "productName": request.adBrief.productName,
+            "description": request.adBrief.description,
+            "style": request.adBrief.style,
+            "mood": request.adBrief.mood,
+            "energy": request.adBrief.energy
+        }
+
+        first_scene = request.scenes[0]
+        scene_dict = {
+            "description": first_scene.description,
+            "duration": first_scene.duration,
+            "narration": first_scene.narration or first_scene.description
+        }
+
+        # Generate video
+        video_url = video_service.generate_video_for_scene(
+            scene_dict,
+            ad_brief_dict,
+            VIDEOS_DIR
+        )
+
+        # Generate audio if TTS is configured
+        audio_path = video_service.generate_audio_for_scene(scene_dict, VIDEOS_DIR)
+
+        # Calculate costs (example - adjust based on actual API costs)
+        video_cost = first_scene.duration * 0.05  # $0.05 per second
+        total_cost = video_cost
+
+        # Track API usage
+        await Database.track_api_usage(
+            user_id=user_id,
+            project_id=project_id or "unknown",
+            service="runway_ml" if not config.use_mock_video else "mock",
+            operation="video_generation",
+            units=first_scene.duration,
+            cost=total_cost,
+            metadata={"scenes": len(request.scenes), "style": request.adBrief.style}
+        )
+
+        # Increment usage count
+        await SubscriptionChecker.increment_usage(user_id)
+
+        # Update project if project_id provided
+        if project_id:
+            await Database.update_project(project_id, user_id, {
+                "video_url": video_url,
+                "status": "complete",
+                "completed_at": datetime.now().isoformat()
+            })
+
+        # Calculate hook score
+        hook_score = random.randint(70, 95)
+        if len(request.scenes) >= 6:
+            hook_score += 5
+
+        logger.info(f"✅ Generated video for user {user_id}, cost: ${total_cost:.4f}")
+
+        return VideoResponse(
+            success=True,
+            videoUrl=video_url,
+            hookScore=min(hook_score, 100)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video generation error: {e}")
+        return VideoResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+# ==================== PROJECT MANAGEMENT ENDPOINTS ====================
+
+@app.get("/api/projects")
+async def get_projects(user = Depends(get_current_user) if AUTH_ENABLED else None):
+    """Get all projects for authenticated user"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    projects = await Database.get_user_projects(user_id)
+
+    logger.info(f"📁 Retrieved {len(projects)} projects for user {user_id}")
+    return {"projects": projects}
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(
+    project_id: str,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """Get a specific project"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    project = await Database.get_project(project_id, user_id)
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return {"project": project}
+
+
+@app.put("/api/projects/{project_id}")
+async def update_project(
+    project_id: str,
+    updates: dict,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """Update a project"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    project = await Database.update_project(project_id, user_id, updates)
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    logger.info(f"✏️ Updated project {project_id}")
+    return {"project": project}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    user = Depends(get_current_user) if AUTH_ENABLED else None
+):
+    """Delete a project"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    await Database.delete_project(project_id, user_id)
+
+    logger.info(f"🗑️ Deleted project {project_id}")
+    return {"message": "Project deleted successfully"}
+
+
+# ==================== USAGE & SUBSCRIPTION ENDPOINTS ====================
+
+@app.get("/api/usage")
+async def get_usage(user = Depends(get_current_user) if AUTH_ENABLED else None):
+    """Get user's usage statistics and subscription info"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+
+    try:
+        # Get subscription info
+        subscription = await SubscriptionChecker.get_subscription_info(user_id)
+
+        # Get usage stats
+        usage_stats = await Database.get_user_usage(user_id)
+
+        return {
+            "subscription": subscription,
+            "monthly_usage": {
+                "videos_generated": subscription.get("current_month_usage", 0) if subscription else 0,
+                "monthly_limit": subscription.get("monthly_video_limit", 0) if subscription else 0,
+                "total_cost_usd": usage_stats.get("total_cost", 0)
+            },
+            "usage_details": usage_stats.get("usage", [])
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching usage: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch usage: {str(e)}")
+
+
+@app.get("/api/subscription")
+async def get_subscription(user = Depends(get_current_user) if AUTH_ENABLED else None):
+    """Get user's subscription details"""
+    if not AUTH_ENABLED:
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+
+    user_id = user["sub"]
+    subscription = await SubscriptionChecker.get_subscription_info(user_id)
+
+    if not subscription:
+        raise HTTPException(status_code=404, detail="No subscription found")
+
+    return {"subscription": subscription}
 
 
 if __name__ == "__main__":
