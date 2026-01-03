@@ -1,6 +1,8 @@
 # Environment variables (API keys)
 .env
+.env.local
 backend/.env
+frontend/.env.local
 *.env
 
 # Python
