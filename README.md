@@ -63,7 +63,7 @@ pip install -r requirements.txt
 1. **Start the backend (Terminal 1):**
 ```bash
 cd backend
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8002
 ```
 
 2. **Start the frontend (Terminal 2):**
@@ -74,8 +74,8 @@ npm run dev
 
 3. **Open your browser:**
    - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8000
-   - API Docs: http://localhost:8000/docs
+   - Backend API: http://localhost:8002
+   - API Docs: http://localhost:8002/docs
 
 ## Running Tests
 

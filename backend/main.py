@@ -217,34 +217,14 @@ async def generate_script(brief: AdBrief):
 async def generate_video(request: VideoRequest):
     """Generate video from scenes and ad brief"""
     from video_service import VideoGenerationService
-    import json
-    import time
-    
-    log_path = r"c:\Users\surya\OneDrive\Desktop\work\projects\personal_proj\Advertising\.cursor\debug.log"
-    
-    # #region agent log
-    try:
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"location":"main.py:217","message":"generate_video endpoint called","data":{"scenesCount":len(request.scenes) if request.scenes else 0,"productName":request.adBrief.productName if request.adBrief else "None"},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + "\n")
-    except:
-        pass
-    # #endregion
-    
+
     try:
         if not request.scenes:
             raise HTTPException(status_code=400, detail="Scenes are required")
-        
+
         # Initialize video generation service
         video_service = VideoGenerationService()
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:228","message":"VideoGenerationService initialized","data":{"hasStabilityKey":bool(video_service.stability_api_key),"useMock":video_service.use_mock},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         # Convert Pydantic models to dicts for the service
         ad_brief_dict = {
             "productName": request.adBrief.productName,
@@ -253,7 +233,7 @@ async def generate_video(request: VideoRequest):
             "mood": request.adBrief.mood,
             "energy": request.adBrief.energy
         }
-        
+
         # For now, generate a single combined video
         # In production, you'd generate videos for each scene and combine them
         first_scene = request.scenes[0]
@@ -262,52 +242,28 @@ async def generate_video(request: VideoRequest):
             "duration": first_scene.duration,
             "narration": first_scene.narration or first_scene.description
         }
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:250","message":"Calling generate_video_for_scene","data":{"sceneDescription":scene_dict.get("description","")[:50],"productName":ad_brief_dict.get("productName","")},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         # Generate video
         video_url = video_service.generate_video_for_scene(
             scene_dict,
             ad_brief_dict,
             VIDEOS_DIR
         )
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:260","message":"generate_video_for_scene returned","data":{"videoUrl":video_url},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         # Generate audio if TTS is configured
         audio_path = video_service.generate_audio_for_scene(scene_dict, VIDEOS_DIR)
-        
+
         # If we have both video and audio, combine them
         if audio_path and os.path.exists(audio_path):
             # For now, just use the video URL
             # Full implementation would combine video + audio
             pass
-        
+
         # Calculate hook score based on scene quality
         hook_score = random.randint(70, 95)
         if len(request.scenes) >= 6:
             hook_score += 5  # Bonus for complete storyboard
-        
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:280","message":"Returning VideoResponse","data":{"success":True,"videoUrl":video_url,"hookScore":min(hook_score, 100)},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"C"}) + "\n")
-        except:
-            pass
-        # #endregion
-        
+
         return VideoResponse(
             success=True,
             videoUrl=video_url,
@@ -316,13 +272,6 @@ async def generate_video(request: VideoRequest):
     except HTTPException:
         raise
     except Exception as e:
-        # #region agent log
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"location":"main.py:290","message":"Exception in generate_video","data":{"error":str(e)},"timestamp":int(time.time()*1000),"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}) + "\n")
-        except:
-            pass
-        # #endregion
         return VideoResponse(
             success=False,
             error=str(e)
